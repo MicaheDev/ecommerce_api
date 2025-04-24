@@ -33,8 +33,19 @@ export const UserController = new Elysia({ prefix: '/auth' })
         const { username, password } = body
         
         // Aquí deberías verificar contra tu base de datos
-        const user = users.get(username)
-        if (!user || user.password !== password) {
+
+        let user = users.get(username); // Intentamos obtener el usuario por username
+
+        if (!user) {
+            // Si no se encontró por username, buscamos por email iterando los valores del Map
+            for (const u of users.values()) {
+                if (u.email === username) {
+                    user = u;
+                    break; // Detenemos la búsqueda una vez que encontramos el usuario
+                }
+            }
+        }
+            if (!user || user.password !== password) {
             set.status = 401
             throw new Error('Credenciales inválidas')
         }

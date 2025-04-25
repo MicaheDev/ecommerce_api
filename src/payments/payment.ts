@@ -1,9 +1,10 @@
 import { Elysia, t } from 'elysia'
-import { authMiddleware } from '../middleware/auth'
+import { jwt } from '@elysiajs/jwt'
+import { env } from '../config/env'
 
 const mobilePayDTO = t.Object({
-	file: t.File(),
-	reference: t.String(),
+    file: t.File(),
+    reference: t.String(),
     phone: t.String()
 })
 
@@ -13,18 +14,38 @@ const PaymentModel = new Elysia()
     })
 
 export const PaymentController = new Elysia({ prefix: '/payment' })
-    .use(authMiddleware)
-    .use(PaymentModel)
+    .use(jwt({
+        secret: env.JWT_SECRET
+    }))
     .get("/", () => "Payment")
-    .post('/report', ({ body }) => {
+    .use(PaymentModel)
+    .guard(
+        {
+            beforeHandle: async ({ jwt, cookie: { auth }, set }) => {
+                const token = auth.value
+                if (!token) {
+                    set.status = 401
+                    throw new Error('No autorizado - Token no proporcionado')
+                }
 
-        const {file, reference, phone} = body
+                const profile = await jwt.verify(token)
+                if (!profile) {
+                    set.status = 401
+                    throw new Error('No autorizado - Token inválido')
+                }
 
-        return {
-            "file": `${Date.now()}-${file.name}`,
-            "reference": reference,
-            "phone": phone
-        }
-    }, {
-        body: 'payment.mobilePay'
-    })
+          
+            }
+        },
+        (app) => app.post('/report', ({ body }) => {
+            const { file, reference, phone } = body
+
+            return {
+                "file": `${Date.now()}-${file.name}`,
+                "reference": reference,
+                "phone": phone
+            }
+        }, {
+            body: 'payment.mobilePay'
+        })
+    )

@@ -1,6 +1,7 @@
 import { Elysia, t } from 'elysia'
 import { jwt } from '@elysiajs/jwt'
 import { env } from '../config/env'
+import { sql } from 'bun'
 
 const SignInDTO = t.Object({
     username: t.String(),
@@ -21,8 +22,16 @@ const AuthModel = new Elysia()
 
 const models = AuthModel.models
 
-// Simulamos una base de datos de usuarios (en producción usarías una base de datos real)
-const users = new Map()
+// Crear la tabla de usuarios si no existe
+await sql`
+    CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        email VARCHAR(100) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+`
 
 export const UserController = new Elysia({ prefix: '/auth' })
     .use(jwt({
@@ -32,28 +41,21 @@ export const UserController = new Elysia({ prefix: '/auth' })
     .post('/sign-in', async ({ body, jwt, cookie: { auth }, set }) => {
         const { username, password } = body
         
-        // Aquí deberías verificar contra tu base de datos
+        // Buscar usuario por username o email
+        const user = await sql`
+            SELECT * FROM users 
+            WHERE username = ${username} OR email = ${username}
+        `
 
-        let user = users.get(username); // Intentamos obtener el usuario por username
-
-        if (!user) {
-            // Si no se encontró por username, buscamos por email iterando los valores del Map
-            for (const u of users.values()) {
-                if (u.email === username) {
-                    user = u;
-                    break; // Detenemos la búsqueda una vez que encontramos el usuario
-                }
-            }
-        }
-            if (!user || user.password !== password) {
+        if (!user || user.length === 0 || user[0].password !== password) {
             set.status = 401
             throw new Error('Credenciales inválidas')
         }
 
         // Generamos el token JWT
         const token = await jwt.sign({
-            username: user.username,
-            email: user.email
+            username: user[0].username,
+            email: user[0].email
         })
 
         // Configuramos la cookie
@@ -74,13 +76,21 @@ export const UserController = new Elysia({ prefix: '/auth' })
         const { username, email, password } = body
 
         // Verificar si el usuario ya existe
-        if (users.has(username)) {
+        const existingUser = await sql`
+            SELECT * FROM users 
+            WHERE username = ${username} OR email = ${email}
+        `
+
+        if (existingUser && existingUser.length > 0) {
             set.status = 400
-            throw new Error('El usuario ya existe')
+            throw new Error('El usuario o email ya existe')
         }
 
         // En producción, deberías hashear la contraseña
-        users.set(username, { username, email, password })
+        await sql`
+            INSERT INTO users (username, email, password)
+            VALUES (${username}, ${email}, ${password})
+        `
 
         return { message: 'Usuario registrado exitosamente' }
     }, {
@@ -99,7 +109,19 @@ export const UserController = new Elysia({ prefix: '/auth' })
             throw new Error('Token inválido')
         }
 
-        return profile
+        // Obtener información actualizada del usuario
+        const user = await sql`
+            SELECT id, username, email, created_at 
+            FROM users 
+            WHERE username = ${profile.username}
+        `
+
+        if (!user || user.length === 0) {
+            set.status = 404
+            throw new Error('Usuario no encontrado')
+        }
+
+        return user[0]
     })
     .post('/sign-out', ({ cookie: { auth } }) => {
         auth.remove()
